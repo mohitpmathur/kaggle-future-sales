@@ -32,3 +32,4 @@ archive/*
 logs/
 data/
 submissions/
+.vscode/
