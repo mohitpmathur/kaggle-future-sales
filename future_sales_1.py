@@ -4,6 +4,20 @@ Kaggle competition: Future Sales
 
 import pandas as pd
 
+from sklearn.model_selection import TimeSeriesSplit
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.model_selection import GridSearchCV
+from sklearn.metrics import mean_squared_error
+
+
+def fit_model(model, x_train, y_train, x_val, y_val):
+    model.fit(x_train, y_train)
+    y_pred = model.predict(x_val)
+    print("RMSE:", np.sqrt(mean_squared_error(
+        y_val.clip(0., 20.), y_pred.clip(0., 20.))))
+    return model
+
+
 print("Reading data ...")
 train = pd.read_csv('data/sales_train_v2.csv')
 test = pd.read_csv('data/test.csv')
@@ -47,7 +61,7 @@ shops = shops.merge(train_shop_unique_item, how='left', on='shop_id')
 items = items.merge(train_item_unique_shop, how='left', on='item_id')
 
 # fill missing values in items with -999
-#items['item_unique_shop'] = items['item_unique_shop'].fillna(-999)
+items['item_unique_shop'] = items['item_unique_shop'].fillna(-999)
 
 # find number of unique items sold by shops each month
 train_shop_unique_items_month = train.groupby(['date_block_num', 'shop_id'])[
@@ -55,3 +69,41 @@ train_shop_unique_items_month = train.groupby(['date_block_num', 'shop_id'])[
 
 # find median price of item sold at a shop each month
 # groupby(month,shop,item)[price].median()
+
+train2 = train.groupby(['date_block_num', 'shop_id', 'item_id'])[
+    'item_cnt_day'].sum().reset_index()
+train_med_price = train.groupby(['date_block_num', 'shop_id', 'item_id'])[
+    'item_price'].median().reset_index()
+train2 = train2.merge(train_med_price, how='left', on=[
+                      'date_block_num', 'shop_id', 'item_id'])
+train2.rename(columns={'item_price': 'item_median_price'},  inplace=True)
+
+train2 = train2.merge(shops, how='left', on='shop_id')
+train2.drop(['shop_name'], axis=1, inplace=True)
+
+items_cat_cols = items.select_dtypes(exclude=['object']).columns.tolist()
+train2 = train2.merge(items[items_cat_cols], how='left', on='item_id')
+train2.rename(columns={'item_cnt_day': 'item_cnt_month'}, inplace=True)
+
+
+train_df = train2[train2['date_block_num'] < 33]
+val_df = train2[train2['date_block_num'] == 33]
+print("train2 shape:", train2.shape)
+print("train_df shape:", train_df.shape)
+print("val_df shape:", val_df.shape)
+
+y_train = train_df['item_cnt_month']
+y_val = val_df['item_cnt_month']
+
+train_df.drop(['item_cnt_month'], axis=1, inplace=True)
+val_df.drop(['item_cnt_month'], axis=1, inplace=True)
+
+
+tscv = TimeSeriesSplit(n_splits=5)
+gbr = GradientBoostingRegressor(learning_rate=0.1, n_estimators=100, verbose=1)
+
+params = {'learning_rate': [0.05],
+          'n_estimators': [100]}
+gbr = GradientBoostingRegressor(verbose=1)
+model = GridSearchCV(gbr, param_grid=params, cv=tscv, n_jobs=-1)
+model = fit_model(model, train_df, y_train, val_df, y_val)
